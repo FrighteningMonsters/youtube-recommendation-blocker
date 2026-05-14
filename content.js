@@ -4,6 +4,45 @@ const THRESHOLD = 5;
 
 const processedCards = new WeakSet();
 
+function ensureCountBadge(card) {
+  let badge = card.querySelector(".yt-extension-count-badge");
+
+  if (badge) {
+    return badge;
+  }
+
+  if (getComputedStyle(card).position === "static") {
+    card.style.position = "relative";
+  }
+
+  badge = document.createElement("div");
+  badge.className = "yt-extension-count-badge";
+  badge.style.cssText = `
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 9999;
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    pointer-events: none;
+  `;
+
+  card.appendChild(badge);
+
+  return badge;
+}
+
+function updateCountBadge(card, count) {
+  const badge = ensureCountBadge(card);
+
+  badge.textContent = `Seen ${count}x`;
+}
+
 async function getCounts() {
   const result = await chrome.storage.local.get(["videoCounts"]);
 
@@ -42,12 +81,6 @@ async function processVideos() {
   console.log("PROCESSING CARDS:", cards.length);
 
   for (const card of cards) {
-    if (processedCards.has(card)) {
-      continue;
-    }
-
-    processedCards.add(card);
-
     const link = card.querySelector("a#thumbnail");
 
     if (!link || !link.href) {
@@ -60,11 +93,17 @@ async function processVideos() {
       continue;
     }
 
-    counts[videoId] = (counts[videoId] || 0) + 1;
+    if (!processedCards.has(card)) {
+      processedCards.add(card);
+      counts[videoId] = (counts[videoId] || 0) + 1;
+    }
 
     console.log(
       `VIDEO ${videoId} COUNT ${counts[videoId]}`
     );
+
+    card.dataset.videoId = videoId;
+    updateCountBadge(card, counts[videoId]);
 
     if (counts[videoId] > THRESHOLD) {
       card.style.display = "none";
