@@ -3,6 +3,8 @@ const thresholdValue = document.getElementById("thresholdValue");
 const thresholdDisplay = document.getElementById("thresholdDisplay");
 const thresholdUnit = document.getElementById("thresholdUnit");
 const pauseAllToggle = document.getElementById("pauseAllToggle");
+const viewBlockedBtn = document.getElementById("viewBlockedBtn");
+const viewAllowlistBtn = document.getElementById("viewAllowlistBtn");
 const clearBtn = document.getElementById("clearBtn");
 const clearStatus = document.getElementById("clearStatus");
 
@@ -78,5 +80,19 @@ if (pauseAllToggle) {
       // turning off pauseAll clears both
       setPauseStates({ pauseAll: false, pauseTracking: false, pauseBlocking: false });
     }
+  });
+}
+
+if (viewBlockedBtn) {
+  viewBlockedBtn.addEventListener("click", () => {
+    const url = chrome.runtime.getURL("blocked-videos.html");
+    chrome.windows.create({ url, width: 700, height: 800, type: "popup" });
+  });
+}
+
+if (viewAllowlistBtn) {
+  viewAllowlistBtn.addEventListener("click", () => {
+    const url = chrome.runtime.getURL("allowlist-manager.html");
+    chrome.windows.create({ url, width: 700, height: 800, type: "popup" });
   });
 }

@@ -5,6 +5,8 @@ const DEBUG = false;
 let PAUSE_ALL = false;
 let PAUSE_TRACKING = false;
 let PAUSE_BLOCKING = false;
+let ALLOWLISTED_VIDEOS = [];
+let ALLOWLISTED_CHANNELS = [];
 
 const cardVideoIds = new WeakMap();
 
@@ -54,6 +56,162 @@ function ensureCountBadge(card) {
   badgeHost.appendChild(badge);
 
   return badge;
+}
+
+function isAllowlistedVideo(videoId) {
+  return ALLOWLISTED_VIDEOS.some((item) => item && item.id === videoId);
+}
+
+function isAllowlistedChannel(channelId) {
+  return ALLOWLISTED_CHANNELS.some((item) => item && item.id === channelId);
+}
+
+function extractVideoTitle(card) {
+  const titleLink = card.querySelector("a#video-title, yt-formatted-string#video-title");
+
+  if (titleLink) {
+    const title = titleLink.textContent?.trim();
+
+    if (title) {
+      return title;
+    }
+  }
+
+  return "Video";
+}
+
+function extractChannelInfo(card) {
+  const channelLink = card.querySelector(
+    "a#channel-name, a.yt-simple-endpoint[href*='/channel/'], a.yt-simple-endpoint[href*='/@']"
+  );
+
+  if (!channelLink || !channelLink.href) {
+    return null;
+  }
+
+  let channelId = null;
+  try {
+    const url = new URL(channelLink.href, window.location.origin);
+    const channelMatch = url.pathname.match(/\/channel\/([^/?]+)/);
+    const handleMatch = url.pathname.match(/\/@([^/?]+)/);
+    channelId = channelMatch?.[1] || handleMatch?.[1] || null;
+  } catch (e) {
+    channelId = null;
+  }
+
+  if (!channelId) {
+    return null;
+  }
+
+  const channelName = channelLink.textContent?.trim() || channelLink.getAttribute("aria-label") || channelId;
+
+  return { channelId, channelName };
+}
+
+function ensureAllowButtons(card, videoId, videoName, channelInfo) {
+  let buttonContainer = card.querySelector(".yt-extension-allow-buttons");
+
+  if (buttonContainer) {
+    return;
+  }
+
+  const badgeHost = card.querySelector("#thumbnail") || card;
+
+  if (getComputedStyle(badgeHost).position === "static") {
+    badgeHost.style.position = "relative";
+  }
+
+  buttonContainer = document.createElement("div");
+  buttonContainer.className = "yt-extension-allow-buttons";
+  buttonContainer.style.cssText = `
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 9998;
+    display: flex;
+    gap: 4px;
+    pointer-events: auto;
+  `;
+
+  // Allow video button
+  const allowVideoBtn = document.createElement("button");
+  allowVideoBtn.title = "Allow this video";
+  allowVideoBtn.style.cssText = `
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+  `;
+  allowVideoBtn.textContent = "V";
+  allowVideoBtn.addEventListener("mouseenter", () => {
+    allowVideoBtn.style.background = "rgba(0, 0, 0, 0.9)";
+  });
+  allowVideoBtn.addEventListener("mouseleave", () => {
+    allowVideoBtn.style.background = "rgba(0, 0, 0, 0.7)";
+  });
+  allowVideoBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    chrome.runtime.sendMessage({ action: "addAllowlistVideo", videoId, videoName });
+    allowVideoBtn.style.opacity = "0.5";
+    allowVideoBtn.disabled = true;
+  });
+
+  buttonContainer.appendChild(allowVideoBtn);
+
+  // Allow channel button
+  if (channelInfo?.channelId) {
+    const allowChannelBtn = document.createElement("button");
+    allowChannelBtn.title = "Allow channel";
+    allowChannelBtn.style.cssText = `
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: none;
+      border-radius: 3px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.2s;
+    `;
+    allowChannelBtn.textContent = "C";
+    allowChannelBtn.addEventListener("mouseenter", () => {
+      allowChannelBtn.style.background = "rgba(0, 0, 0, 0.9)";
+    });
+    allowChannelBtn.addEventListener("mouseleave", () => {
+      allowChannelBtn.style.background = "rgba(0, 0, 0, 0.7)";
+    });
+    allowChannelBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chrome.runtime.sendMessage({
+        action: "addAllowlistChannel",
+        channelId: channelInfo.channelId,
+        channelName: channelInfo.channelName
+      });
+      allowChannelBtn.style.opacity = "0.5";
+      allowChannelBtn.disabled = true;
+    });
+
+    buttonContainer.appendChild(allowChannelBtn);
+  }
+
+  badgeHost.appendChild(buttonContainer);
 }
 
 function updateCountBadge(card, count) {
@@ -203,7 +361,7 @@ async function fastBlockAlreadyBlocked() {
 
     const count = getValidCount(countsCache, videoId);
 
-    if (count > THRESHOLD && !PAUSE_BLOCKING && !PAUSE_ALL) {
+    if (count > THRESHOLD && !PAUSE_BLOCKING && !PAUSE_ALL && !isAllowlistedVideo(videoId)) {
       removeCardFromLayout(card);
       log(`FAST BLOCKED ${videoId} (count: ${count})`);
     }
@@ -290,7 +448,17 @@ async function processVideos() {
     card.dataset.ytExtRenderedVideoId = videoId;
     updateCountBadge(card, currentCount);
 
-    if (currentCount > THRESHOLD && !PAUSE_BLOCKING && !PAUSE_ALL) {
+    const videoName = extractVideoTitle(card);
+    const channelInfo = extractChannelInfo(card);
+    ensureAllowButtons(card, videoId, videoName, channelInfo);
+
+    if (
+      currentCount > THRESHOLD &&
+      !PAUSE_BLOCKING &&
+      !PAUSE_ALL &&
+      !isAllowlistedVideo(videoId) &&
+      !(channelInfo?.channelId && isAllowlistedChannel(channelInfo.channelId))
+    ) {
       removeCardFromLayout(card);
       removedAnyCard = true;
 
@@ -339,10 +507,12 @@ observer.observe(document.body, {
   subtree: true
 });
 
-chrome.storage.local.get(["pauseAll", "pauseTracking", "pauseBlocking"], (res) => {
+chrome.storage.local.get(["pauseAll", "pauseTracking", "pauseBlocking", "allowlistedVideos", "allowlistedChannels"], (res) => {
   PAUSE_ALL = res.pauseAll !== undefined ? res.pauseAll : false;
   PAUSE_TRACKING = res.pauseTracking !== undefined ? res.pauseTracking : false;
   PAUSE_BLOCKING = res.pauseBlocking !== undefined ? res.pauseBlocking : false;
+  ALLOWLISTED_VIDEOS = res.allowlistedVideos || [];
+  ALLOWLISTED_CHANNELS = res.allowlistedChannels || [];
 
   getCountsCache().then(() => {
     getThreshold().then((t) => {
@@ -381,5 +551,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     getCountsCache().then(() => {
       processVideos();
     });
+  } else if (message.action === "allowlistUpdated") {
+    ALLOWLISTED_VIDEOS = message.videos || [];
+    ALLOWLISTED_CHANNELS = message.channels || [];
+    processVideos();
   }
 });
