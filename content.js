@@ -1,8 +1,21 @@
 console.log("YT EXTENSION LOADED");
 
 const THRESHOLD = 5;
+const DEBUG = false;
 
-const processedCards = new WeakSet();
+const cardVideoIds = new WeakMap();
+
+let countsCache = null;
+let isProcessing = false;
+let hasPendingRun = false;
+let saveTimer = null;
+let processTimer = null;
+
+function log(...args) {
+  if (DEBUG) {
+    console.log(...args);
+  }
+}
 
 function ensureCountBadge(card) {
   let badge = card.querySelector(".yt-extension-count-badge");
@@ -11,8 +24,10 @@ function ensureCountBadge(card) {
     return badge;
   }
 
-  if (getComputedStyle(card).position === "static") {
-    card.style.position = "relative";
+  const badgeHost = card.querySelector("#thumbnail") || card;
+
+  if (getComputedStyle(badgeHost).position === "static") {
+    badgeHost.style.position = "relative";
   }
 
   badge = document.createElement("div");
@@ -30,14 +45,19 @@ function ensureCountBadge(card) {
     font-weight: 700;
     line-height: 1;
     pointer-events: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   `;
 
-  card.appendChild(badge);
+  badgeHost.appendChild(badge);
 
   return badge;
 }
 
 function updateCountBadge(card, count) {
+  if (!Number.isFinite(count) || count < 1) {
+    return;
+  }
+
   const badge = ensureCountBadge(card);
 
   badge.textContent = `Seen ${count}x`;
@@ -55,9 +75,38 @@ async function saveCounts(counts) {
   });
 }
 
+async function getCountsCache() {
+  if (!countsCache) {
+    countsCache = await getCounts();
+  }
+
+  return countsCache;
+}
+
+function getValidCount(counts, videoId) {
+  const value = counts[videoId];
+
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function scheduleCountsSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    if (countsCache) {
+      saveCounts(countsCache);
+    }
+  }, 400);
+}
+
 function extractVideoId(urlString) {
   try {
-    const url = new URL(urlString);
+    const url = new URL(urlString, window.location.origin);
+
+    if (url.pathname.startsWith("/shorts/")) {
+      const parts = url.pathname.split("/").filter(Boolean);
+
+      return parts[1] || null;
+    }
 
     return url.searchParams.get("v");
   } catch {
@@ -69,19 +118,37 @@ function findCards() {
   return document.querySelectorAll(`
     ytd-rich-item-renderer,
     ytd-compact-video-renderer,
-    ytd-video-renderer
+    ytd-video-renderer,
+    ytd-grid-video-renderer
+  `);
+}
+
+function findVideoLink(card) {
+  return card.querySelector(`
+    a#thumbnail[href*="/watch"],
+    a.yt-simple-endpoint[href*="/watch"],
+    a[href*="/watch?v="],
+    a[href*="/shorts/"]
   `);
 }
 
 async function processVideos() {
-  const counts = await getCounts();
+  if (isProcessing) {
+    hasPendingRun = true;
+    return;
+  }
+
+  isProcessing = true;
+
+  try {
+  const counts = await getCountsCache();
 
   const cards = findCards();
 
-  console.log("PROCESSING CARDS:", cards.length);
+  log("PROCESSING CARDS:", cards.length);
 
   for (const card of cards) {
-    const link = card.querySelector("a#thumbnail");
+    const link = findVideoLink(card);
 
     if (!link || !link.href) {
       continue;
@@ -93,34 +160,56 @@ async function processVideos() {
       continue;
     }
 
-    if (!processedCards.has(card)) {
-      processedCards.add(card);
-      counts[videoId] = (counts[videoId] || 0) + 1;
+    if (card.dataset.ytExtRenderedVideoId === videoId) {
+      continue;
     }
 
-    console.log(
-      `VIDEO ${videoId} COUNT ${counts[videoId]}`
-    );
+    const previousVideoId = cardVideoIds.get(card);
+
+    if (previousVideoId !== videoId) {
+      counts[videoId] = getValidCount(counts, videoId) + 1;
+      cardVideoIds.set(card, videoId);
+    }
+
+    const currentCount = getValidCount(counts, videoId);
+
+    log(`VIDEO ${videoId} COUNT ${currentCount}`);
 
     card.dataset.videoId = videoId;
-    updateCountBadge(card, counts[videoId]);
+    card.dataset.ytExtRenderedVideoId = videoId;
+    updateCountBadge(card, currentCount);
 
-    if (counts[videoId] > THRESHOLD) {
+    if (currentCount > THRESHOLD) {
       card.style.display = "none";
 
-      console.log(
-        `HIDING ${videoId}`
-      );
-    } else {
-      card.style.outline = "2px solid lime";
+      log(`HIDING ${videoId}`);
     }
   }
 
-  await saveCounts(counts);
+  scheduleCountsSave();
+  } finally {
+    isProcessing = false;
+
+    if (hasPendingRun) {
+      hasPendingRun = false;
+      scheduleProcessVideos(100);
+    }
+  }
+}
+
+function scheduleProcessVideos(delay = 150) {
+  if (processTimer) {
+    clearTimeout(processTimer);
+  }
+
+  processTimer = setTimeout(() => {
+    processTimer = null;
+    processVideos();
+  }, delay);
 }
 
 const observer = new MutationObserver(() => {
-  processVideos();
+  scheduleProcessVideos(150);
 });
 
 observer.observe(document.body, {
