@@ -1,7 +1,10 @@
 console.log("YT EXTENSION LOADED");
 
-const THRESHOLD = 5;
+let THRESHOLD = 5;
 const DEBUG = false;
+let PAUSE_ALL = false;
+let PAUSE_TRACKING = false;
+let PAUSE_BLOCKING = false;
 
 const cardVideoIds = new WeakMap();
 
@@ -54,13 +57,13 @@ function ensureCountBadge(card) {
 }
 
 function updateCountBadge(card, count) {
-  if (!Number.isFinite(count) || count < 1) {
+  if (!Number.isFinite(count) || count < 2) {
     return;
   }
 
   const badge = ensureCountBadge(card);
 
-  badge.textContent = `Seen ${count}x`;
+  badge.textContent = `Seen ${count - 1}x`;
 }
 
 async function getCounts() {
@@ -77,6 +80,14 @@ async function saveCounts(counts) {
       { action: "updateCounts", counts },
       () => resolve()
     );
+  });
+}
+
+async function getThreshold() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "getThreshold" }, (response) => {
+      resolve(response.threshold || 5);
+    });
   });
 }
 
@@ -192,12 +203,32 @@ async function fastBlockAlreadyBlocked() {
 
     const count = getValidCount(countsCache, videoId);
 
-    if (count > THRESHOLD) {
+    if (count > THRESHOLD && !PAUSE_BLOCKING && !PAUSE_ALL) {
       removeCardFromLayout(card);
       log(`FAST BLOCKED ${videoId} (count: ${count})`);
     }
   }
 }
+
+  function restoreAllCards() {
+    const cards = findCards();
+
+    for (const card of cards) {
+      const container = card.closest(
+        "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
+      ) || card;
+      if (container.style.display === "none") {
+        container.style.display = "";
+      }
+
+      // Clear internal markers so cards will be re-processed when blocking resumes
+      try {
+        delete card.dataset.ytExtRenderedVideoId;
+        delete card.dataset.videoId;
+        delete card.dataset.ytExtFastChecked;
+      } catch (e) {}
+    }
+  }
 
 function refreshHomeGridLayout() {
   compactHomeGrid();
@@ -205,6 +236,11 @@ function refreshHomeGridLayout() {
 }
 
 async function processVideos() {
+  if (PAUSE_ALL) {
+    isProcessing = false;
+    return;
+  }
+
   if (isProcessing) {
     hasPendingRun = true;
     return;
@@ -240,7 +276,9 @@ async function processVideos() {
     const previousVideoId = cardVideoIds.get(card);
 
     if (previousVideoId !== videoId) {
-      counts[videoId] = getValidCount(counts, videoId) + 1;
+      if (!PAUSE_TRACKING && !PAUSE_ALL) {
+        counts[videoId] = getValidCount(counts, videoId) + 1;
+      }
       cardVideoIds.set(card, videoId);
     }
 
@@ -252,7 +290,7 @@ async function processVideos() {
     card.dataset.ytExtRenderedVideoId = videoId;
     updateCountBadge(card, currentCount);
 
-    if (currentCount > THRESHOLD) {
+    if (currentCount > THRESHOLD && !PAUSE_BLOCKING && !PAUSE_ALL) {
       removeCardFromLayout(card);
       removedAnyCard = true;
 
@@ -287,9 +325,13 @@ function scheduleProcessVideos(delay = 150) {
 }
 
 const observer = new MutationObserver(() => {
-  fastBlockAlreadyBlocked();
-  compactHomeGrid();
-  scheduleProcessVideos(150);
+  if (PAUSE_ALL) {
+    restoreAllCards();
+  } else {
+    if (!PAUSE_BLOCKING) fastBlockAlreadyBlocked();
+    compactHomeGrid();
+    scheduleProcessVideos(150);
+  }
 });
 
 observer.observe(document.body, {
@@ -297,7 +339,47 @@ observer.observe(document.body, {
   subtree: true
 });
 
-getCountsCache().then(() => {
-  fastBlockAlreadyBlocked();
-  processVideos();
+chrome.storage.local.get(["pauseAll", "pauseTracking", "pauseBlocking"], (res) => {
+  PAUSE_ALL = res.pauseAll !== undefined ? res.pauseAll : false;
+  PAUSE_TRACKING = res.pauseTracking !== undefined ? res.pauseTracking : false;
+  PAUSE_BLOCKING = res.pauseBlocking !== undefined ? res.pauseBlocking : false;
+
+  getCountsCache().then(() => {
+    getThreshold().then((t) => {
+      THRESHOLD = t;
+      if (PAUSE_ALL) {
+        restoreAllCards();
+      } else {
+        if (!PAUSE_BLOCKING) fastBlockAlreadyBlocked();
+        processVideos();
+      }
+    });
+  });
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "thresholdChanged") {
+    THRESHOLD = message.threshold;
+    processVideos();
+  } else if (message.action === "pauseStatesChanged") {
+    const s = message.states || {};
+    PAUSE_ALL = !!s.pauseAll;
+    PAUSE_TRACKING = !!s.pauseTracking;
+    PAUSE_BLOCKING = !!s.pauseBlocking;
+    if (PAUSE_ALL) {
+      restoreAllCards();
+    } else {
+      if (!PAUSE_BLOCKING) {
+        fastBlockAlreadyBlocked();
+        processVideos();
+      } else {
+        restoreAllCards();
+      }
+    }
+  } else if (message.action === "countsCleared") {
+    countsCache = null;
+    getCountsCache().then(() => {
+      processVideos();
+    });
+  }
 });
