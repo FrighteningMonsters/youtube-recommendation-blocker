@@ -132,6 +132,38 @@ function findVideoLink(card) {
   `);
 }
 
+function removeCardFromLayout(card) {
+  const container = card.closest(
+    "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
+  ) || card;
+
+  container.remove();
+}
+
+function compactHomeGrid() {
+  const rows = document.querySelectorAll("ytd-rich-grid-row");
+
+  for (const row of rows) {
+    const items = row.querySelectorAll("ytd-rich-item-renderer");
+
+    for (const item of items) {
+      if (!findVideoLink(item)) {
+        item.remove();
+      }
+    }
+
+    if (!row.querySelector("ytd-rich-item-renderer")) {
+      row.remove();
+    }
+  }
+}
+
+function refreshHomeGridLayout() {
+  compactHomeGrid();
+  window.dispatchEvent(new Event("resize"));
+  scheduleProcessVideos(80);
+}
+
 async function processVideos() {
   if (isProcessing) {
     hasPendingRun = true;
@@ -144,6 +176,7 @@ async function processVideos() {
   const counts = await getCountsCache();
 
   const cards = findCards();
+  let removedAnyCard = false;
 
   log("PROCESSING CARDS:", cards.length);
 
@@ -180,10 +213,15 @@ async function processVideos() {
     updateCountBadge(card, currentCount);
 
     if (currentCount > THRESHOLD) {
-      card.style.display = "none";
+      removeCardFromLayout(card);
+      removedAnyCard = true;
 
       log(`HIDING ${videoId}`);
     }
+  }
+
+  if (removedAnyCard) {
+    refreshHomeGridLayout();
   }
 
   scheduleCountsSave();
