@@ -47,6 +47,24 @@ function upsertAllowlistEntry(list, entry) {
   }
 }
 
+function sendMessageToTab(tabId, message) {
+  try {
+    const result = chrome.tabs.sendMessage(tabId, message);
+
+    if (result && typeof result.catch === "function") {
+      result.catch(() => {});
+    }
+  } catch (error) {}
+}
+
+function broadcastToYouTubeTabs(message) {
+  chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
+    for (const tab of tabs) {
+      sendMessageToTab(tab.id, message);
+    }
+  });
+}
+
 async function getThreshold() {
   if (threshold === null) {
     const result = await chrome.storage.local.get(["threshold"]);
@@ -161,14 +179,10 @@ async function removeAllowlist(type, id) {
 }
 
 function broadcastAllowlistUpdate() {
-  chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
-    for (const tab of tabs) {
-      chrome.tabs.sendMessage(tab.id, {
-        action: "allowlistUpdated",
-        videos: allowlistedVideos || [],
-        channels: allowlistedChannels || []
-      }).catch(() => {});
-    }
+  broadcastToYouTubeTabs({
+    action: "allowlistUpdated",
+    videos: allowlistedVideos || [],
+    channels: allowlistedChannels || []
   });
 }
 
@@ -193,13 +207,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === "setThreshold") {
     setThreshold(message.threshold).then(() => {
-      chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
-        for (const tab of tabs) {
-          chrome.tabs.sendMessage(tab.id, {
-            action: "thresholdChanged",
-            threshold: message.threshold
-          }).catch(() => {});
-        }
+      broadcastToYouTubeTabs({
+        action: "thresholdChanged",
+        threshold: message.threshold
       });
       sendResponse({ success: true });
     });
@@ -211,16 +221,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === "setPauseStates") {
     setPauseStates(message.states).then(() => {
-      chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
-        for (const tab of tabs) {
-          chrome.tabs.sendMessage(tab.id, {
-            action: "pauseStatesChanged",
-            states: {
-              pauseAll: pauseAll,
-              pauseTracking: pauseTracking,
-              pauseBlocking: pauseBlocking
-            }
-          }).catch(() => {});
+      broadcastToYouTubeTabs({
+        action: "pauseStatesChanged",
+        states: {
+          pauseAll: pauseAll,
+          pauseTracking: pauseTracking,
+          pauseBlocking: pauseBlocking
         }
       });
       sendResponse({ success: true });
@@ -233,13 +239,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === "setEnabled") {
     setEnabled(message.enabled).then(() => {
-      chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
-        for (const tab of tabs) {
-          chrome.tabs.sendMessage(tab.id, {
-            action: "enabledChanged",
-            enabled: message.enabled
-          }).catch(() => {});
-        }
+      broadcastToYouTubeTabs({
+        action: "enabledChanged",
+        enabled: message.enabled
       });
       sendResponse({ success: true });
     });
@@ -247,13 +249,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "clearCounts") {
     videoCounts = {};
     chrome.storage.local.set({ videoCounts: {} });
-    chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
-      for (const tab of tabs) {
-        chrome.tabs.sendMessage(tab.id, {
-          action: "countsCleared"
-        }).catch(() => {});
-      }
-    });
+    broadcastToYouTubeTabs({ action: "countsCleared" });
     sendResponse({ success: true });
   } else if (message.action === "getAllowlists") {
     getAllowlists().then((lists) => {
