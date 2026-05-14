@@ -64,14 +64,19 @@ function updateCountBadge(card, count) {
 }
 
 async function getCounts() {
-  const result = await chrome.storage.local.get(["videoCounts"]);
-
-  return result.videoCounts || {};
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "getCounts" }, (response) => {
+      resolve(response.counts || {});
+    });
+  });
 }
 
 async function saveCounts(counts) {
-  await chrome.storage.local.set({
-    videoCounts: counts
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { action: "updateCounts", counts },
+      () => resolve()
+    );
   });
 }
 
@@ -137,7 +142,7 @@ function removeCardFromLayout(card) {
     "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
   ) || card;
 
-  container.remove();
+  container.style.display = "none";
 }
 
 function compactHomeGrid() {
@@ -147,7 +152,7 @@ function compactHomeGrid() {
     const items = row.querySelectorAll("ytd-rich-item-renderer");
 
     for (const item of items) {
-      if (!findVideoLink(item)) {
+      if (item.style.display === "none" || !findVideoLink(item)) {
         item.remove();
       }
     }
@@ -157,11 +162,46 @@ function compactHomeGrid() {
     }
   }
 }
+async function fastBlockAlreadyBlocked() {
+  if (!countsCache) {
+    return;
+  }
+
+  const cards = findCards();
+
+  for (const card of cards) {
+    if (card.dataset.ytExtFastChecked) {
+      continue;
+    }
+
+    const link = findVideoLink(card);
+
+    if (!link || !link.href) {
+      card.dataset.ytExtFastChecked = "true";
+      continue;
+    }
+
+    const videoId = extractVideoId(link.href);
+
+    if (!videoId) {
+      card.dataset.ytExtFastChecked = "true";
+      continue;
+    }
+
+    card.dataset.ytExtFastChecked = "true";
+
+    const count = getValidCount(countsCache, videoId);
+
+    if (count > THRESHOLD) {
+      removeCardFromLayout(card);
+      log(`FAST BLOCKED ${videoId} (count: ${count})`);
+    }
+  }
+}
 
 function refreshHomeGridLayout() {
   compactHomeGrid();
   window.dispatchEvent(new Event("resize"));
-  scheduleProcessVideos(80);
 }
 
 async function processVideos() {
@@ -247,6 +287,8 @@ function scheduleProcessVideos(delay = 150) {
 }
 
 const observer = new MutationObserver(() => {
+  fastBlockAlreadyBlocked();
+  compactHomeGrid();
   scheduleProcessVideos(150);
 });
 
@@ -255,4 +297,7 @@ observer.observe(document.body, {
   subtree: true
 });
 
-processVideos();
+getCountsCache().then(() => {
+  fastBlockAlreadyBlocked();
+  processVideos();
+});
