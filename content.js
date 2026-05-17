@@ -3,6 +3,8 @@ console.log("YT EXTENSION LOADED");
 let THRESHOLD = 5;
 const DEBUG = false;
 let PAUSE_ALL = false;
+let PAUSE_TRACKING = false;
+let PAUSE_BLOCKING = false;
 let ALLOWLISTED_VIDEOS = [];
 let ALLOWLISTED_CHANNELS = [];
 
@@ -359,7 +361,7 @@ async function fastBlockAlreadyBlocked() {
 
     const count = getValidCount(countsCache, videoId);
 
-    if (count > THRESHOLD && !PAUSE_BLOCKING && !PAUSE_ALL && !isAllowlistedVideo(videoId)) {
+    if (count > THRESHOLD && !PAUSE_BLOCKING && !isAllowlistedVideo(videoId)) {
       removeCardFromLayout(card);
       log(`FAST BLOCKED ${videoId} (count: ${count})`);
     }
@@ -392,7 +394,7 @@ function refreshHomeGridLayout() {
 }
 
 async function processVideos() {
-  if (PAUSE_ALL) {
+  if (PAUSE_TRACKING && PAUSE_BLOCKING) {
     isProcessing = false;
     return;
   }
@@ -432,7 +434,7 @@ async function processVideos() {
     const previousVideoId = cardVideoIds.get(card);
 
     if (previousVideoId !== videoId) {
-      if (!PAUSE_TRACKING && !PAUSE_ALL) {
+      if (!PAUSE_TRACKING) {
         counts[videoId] = getValidCount(counts, videoId) + 1;
       }
       cardVideoIds.set(card, videoId);
@@ -453,7 +455,6 @@ async function processVideos() {
     if (
       currentCount > THRESHOLD &&
       !PAUSE_BLOCKING &&
-      !PAUSE_ALL &&
       !isAllowlistedVideo(videoId) &&
       !(channelInfo?.channelId && isAllowlistedChannel(channelInfo.channelId))
     ) {
@@ -505,15 +506,17 @@ observer.observe(document.body, {
   subtree: true
 });
 
-chrome.storage.local.get(["pauseAll", "allowlistedVideos", "allowlistedChannels"], (res) => {
-  PAUSE_ALL = res.pauseAll !== undefined ? res.pauseAll : false;
+chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll", "allowlistedVideos", "allowlistedChannels"], (res) => {
+  const legacyPauseAll = res.pauseAll !== undefined ? !!res.pauseAll : false;
+  PAUSE_TRACKING = res.pauseTracking !== undefined ? res.pauseTracking : legacyPauseAll;
+  PAUSE_BLOCKING = res.pauseBlocking !== undefined ? res.pauseBlocking : legacyPauseAll;
   ALLOWLISTED_VIDEOS = res.allowlistedVideos || [];
   ALLOWLISTED_CHANNELS = res.allowlistedChannels || [];
 
   getCountsCache().then(() => {
     getThreshold().then((t) => {
       THRESHOLD = t;
-      if (PAUSE_ALL) {
+      if (PAUSE_TRACKING && PAUSE_BLOCKING) {
         restoreAllCards();
       } else {
         fastBlockAlreadyBlocked();
@@ -529,8 +532,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     processVideos();
   } else if (message.action === "pauseStatesChanged") {
     const s = message.states || {};
-    PAUSE_ALL = !!s.pauseAll;
-    if (PAUSE_ALL) {
+    PAUSE_TRACKING = !!s.pauseTracking;
+    PAUSE_BLOCKING = !!s.pauseBlocking;
+    if (PAUSE_TRACKING && PAUSE_BLOCKING) {
       restoreAllCards();
     } else {
       fastBlockAlreadyBlocked();

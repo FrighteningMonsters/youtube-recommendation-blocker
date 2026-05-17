@@ -2,7 +2,8 @@ const thresholdSlider = document.getElementById("thresholdSlider");
 const thresholdValue = document.getElementById("thresholdValue");
 const thresholdDisplay = document.getElementById("thresholdDisplay");
 const thresholdUnit = document.getElementById("thresholdUnit");
-const pauseAllToggle = document.getElementById("pauseAllToggle");
+const pauseTrackingToggle = document.getElementById("pauseTrackingToggle");
+const pauseBlockingToggle = document.getElementById("pauseBlockingToggle");
 const viewBlockedBtn = document.getElementById("viewBlockedBtn");
 const viewAllowlistBtn = document.getElementById("viewAllowlistBtn");
 const exportDataBtn = document.getElementById("exportDataBtn");
@@ -12,15 +13,10 @@ const dataStatus = document.getElementById("dataStatus");
 const clearBtn = document.getElementById("clearBtn");
 const clearStatus = document.getElementById("clearStatus");
 
-function setUIEnabled(enabled) {
-  thresholdSlider.disabled = !enabled;
-  clearBtn.disabled = !enabled;
-  thresholdValue.style.opacity = enabled ? "1" : "0.5";
-}
-
 function updatePauseUI(states) {
   if (!states) return;
-  if (pauseAllToggle) pauseAllToggle.checked = !!states.pauseAll;
+  if (pauseTrackingToggle) pauseTrackingToggle.checked = !!states.pauseTracking;
+  if (pauseBlockingToggle) pauseBlockingToggle.checked = !!states.pauseBlocking;
 }
 
 function setDataStatus(message, isError = false) {
@@ -71,7 +67,8 @@ async function exportData() {
   const storageResult = await getLocalStorage([
     "videoCounts",
     "threshold",
-    "pauseAll",
+    "pauseTracking",
+    "pauseBlocking",
     "allowlistedVideos",
     "allowlistedChannels"
   ]);
@@ -81,7 +78,8 @@ async function exportData() {
     data: {
       videoCounts: storageResult.videoCounts || {},
       threshold: storageResult.threshold || 5,
-      pauseAll: !!storageResult.pauseAll,
+      pauseTracking: !!storageResult.pauseTracking,
+      pauseBlocking: !!storageResult.pauseBlocking,
       allowlistedVideos: storageResult.allowlistedVideos || [],
       allowlistedChannels: storageResult.allowlistedChannels || []
     }
@@ -114,7 +112,6 @@ chrome.runtime.sendMessage({ action: "getThreshold" }, (response) => {
 
 chrome.runtime.sendMessage({ action: "getPauseStates" }, (states) => {
   updatePauseUI(states);
-  setUIEnabled(!(states && states.pauseAll));
 });
 
 thresholdSlider.addEventListener("input", (e) => {
@@ -150,19 +147,19 @@ function setPauseStates(states, cb) {
     if (typeof cb === "function") cb();
     chrome.runtime.sendMessage({ action: "getPauseStates" }, (newStates) => {
       updatePauseUI(newStates);
-      setUIEnabled(!(newStates && newStates.pauseAll));
     });
   });
 }
 
-if (pauseAllToggle) {
-  pauseAllToggle.addEventListener("change", (e) => {
-    const checked = !!e.target.checked;
-    if (checked) {
-      setPauseStates({ pauseAll: true });
-    } else {
-      setPauseStates({ pauseAll: false });
-    }
+if (pauseTrackingToggle) {
+  pauseTrackingToggle.addEventListener("change", (e) => {
+    setPauseStates({ pauseTracking: !!e.target.checked, pauseBlocking: !!(pauseBlockingToggle && pauseBlockingToggle.checked) });
+  });
+}
+
+if (pauseBlockingToggle) {
+  pauseBlockingToggle.addEventListener("change", (e) => {
+    setPauseStates({ pauseTracking: !!(pauseTrackingToggle && pauseTrackingToggle.checked), pauseBlocking: !!e.target.checked });
   });
 }
 

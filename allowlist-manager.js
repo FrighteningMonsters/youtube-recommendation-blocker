@@ -91,7 +91,8 @@ async function exportData() {
   const storageResult = await getLocalStorage([
     "videoCounts",
     "threshold",
-    "pauseAll",
+    "pauseTracking",
+    "pauseBlocking",
     "allowlistedVideos",
     "allowlistedChannels"
   ]);
@@ -102,7 +103,8 @@ async function exportData() {
     data: {
       videoCounts: storageResult.videoCounts || {},
       threshold: storageResult.threshold || 5,
-      pauseAll: !!storageResult.pauseAll,
+      pauseTracking: !!storageResult.pauseTracking,
+      pauseBlocking: !!storageResult.pauseBlocking,
       allowlistedVideos: storageResult.allowlistedVideos || [],
       allowlistedChannels: storageResult.allowlistedChannels || []
     }

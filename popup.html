@@ -148,11 +148,20 @@
 <body>
   <div class="container">
     <div class="setting">
-      <label class="label">Pause blocking & tracking</label>
+      <label class="label">Pause tracking</label>
       <label class="switch" style="margin-top:8px;">
-        <input type="checkbox" id="pauseAllToggle">
+        <input type="checkbox" id="pauseTrackingToggle">
         <span class="slider-switch"></span>
       </label>
+      <div class="status">Stops counting new videos while still letting existing blocks remain.</div>
+    </div>
+    <div class="setting">
+      <label class="label">Pause blocking</label>
+      <label class="switch" style="margin-top:8px;">
+        <input type="checkbox" id="pauseBlockingToggle">
+        <span class="slider-switch"></span>
+      </label>
+      <div class="status">Stops hiding videos while still tracking what you see.</div>
     </div>
     <div class="setting">
       <label class="label">Hide threshold</label>

@@ -1,6 +1,7 @@
 let videoCounts = null;
 let threshold = null;
-let pauseAll = null;
+let pauseTracking = null;
+let pauseBlocking = null;
 let allowlistedVideos = null;
 let allowlistedChannels = null;
 
@@ -8,7 +9,8 @@ const BACKUP_SCHEMA_VERSION = 1;
 const BACKUP_KEYS = [
   "videoCounts",
   "threshold",
-  "pauseAll",
+  "pauseTracking",
+  "pauseBlocking",
   "allowlistedVideos",
   "allowlistedChannels"
 ];
@@ -88,7 +90,8 @@ function buildExportPayload(storageResult) {
     data: {
       videoCounts: normalizeCountsMap(storageResult.videoCounts),
       threshold: normalizeThreshold(storageResult.threshold),
-      pauseAll: !!storageResult.pauseAll,
+      pauseTracking: !!storageResult.pauseTracking,
+      pauseBlocking: !!storageResult.pauseBlocking,
       allowlistedVideos: normalizeAllowlistList(storageResult.allowlistedVideos, "Video"),
       allowlistedChannels: normalizeAllowlistList(storageResult.allowlistedChannels, "Channel")
     }
@@ -100,12 +103,14 @@ function parseImportPayload(payload) {
     ? payload.data
     : payload;
 
-  const pauseAll = !!source?.pauseAll;
+  const pauseTracking = source?.pauseTracking !== undefined ? !!source.pauseTracking : !!source?.pauseAll;
+  const pauseBlocking = source?.pauseBlocking !== undefined ? !!source.pauseBlocking : !!source?.pauseAll;
 
   return {
     videoCounts: normalizeCountsMap(source?.videoCounts),
     threshold: normalizeThreshold(source?.threshold),
-    pauseAll,
+    pauseTracking,
+    pauseBlocking,
     allowlistedVideos: normalizeAllowlistList(source?.allowlistedVideos, "Video"),
     allowlistedChannels: normalizeAllowlistList(source?.allowlistedChannels, "Channel")
   };
@@ -143,17 +148,32 @@ async function setThreshold(newThreshold) {
 }
 
 async function getPauseStates() {
-  if (pauseAll === null) {
-    const result = await chrome.storage.local.get(["pauseAll"]);
-    pauseAll = result.pauseAll || false;
+  if (pauseTracking === null || pauseBlocking === null) {
+    const result = await chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll"]);
+    const legacyPauseAll = result.pauseAll !== undefined ? !!result.pauseAll : false;
+    pauseTracking = result.pauseTracking !== undefined ? result.pauseTracking : legacyPauseAll;
+    pauseBlocking = result.pauseBlocking !== undefined ? result.pauseBlocking : legacyPauseAll;
+
+    if (result.pauseAll !== undefined && (result.pauseTracking === undefined || result.pauseBlocking === undefined)) {
+      await chrome.storage.local.set({
+        pauseTracking,
+        pauseBlocking
+      });
+      chrome.storage.local.remove("pauseAll");
+    }
   }
-  return { pauseAll };
+  return { pauseTracking, pauseBlocking };
 }
 
 async function setPauseStates(states) {
-  if (states.pauseAll !== undefined) pauseAll = states.pauseAll;
+  if (states.pauseTracking !== undefined) pauseTracking = states.pauseTracking;
+  if (states.pauseBlocking !== undefined) pauseBlocking = states.pauseBlocking;
 
-  await chrome.storage.local.set({ pauseAll: pauseAll });
+  await chrome.storage.local.set({
+    pauseTracking: pauseTracking,
+    pauseBlocking: pauseBlocking
+  });
+  chrome.storage.local.remove("pauseAll");
 }
 
 async function getAllowlists() {
@@ -241,7 +261,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       videoCounts = imported.videoCounts;
       threshold = imported.threshold;
-      pauseAll = imported.pauseAll;
+      pauseTracking = imported.pauseTracking;
+      pauseBlocking = imported.pauseBlocking;
       allowlistedVideos = imported.allowlistedVideos;
       allowlistedChannels = imported.allowlistedChannels;
 
@@ -249,15 +270,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         {
           videoCounts,
           threshold,
-          pauseAll,
+          pauseTracking,
+          pauseBlocking,
           allowlistedVideos,
           allowlistedChannels
         },
         () => {
+          chrome.storage.local.remove("pauseAll");
           broadcastToYouTubeTabs({ action: "thresholdChanged", threshold });
           broadcastToYouTubeTabs({
             action: "pauseStatesChanged",
-            states: { pauseAll }
+            states: { pauseTracking, pauseBlocking }
           });
           broadcastToYouTubeTabs({ action: "countsCleared" });
           broadcastAllowlistUpdate();
@@ -304,7 +327,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     setPauseStates(message.states).then(() => {
       broadcastToYouTubeTabs({
         action: "pauseStatesChanged",
-        states: { pauseAll: pauseAll }
+        states: {
+          pauseTracking: pauseTracking,
+          pauseBlocking: pauseBlocking
+        }
       });
       sendResponse({ success: true });
     });
