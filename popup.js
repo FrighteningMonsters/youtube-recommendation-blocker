@@ -161,7 +161,7 @@ if (decayDaysSlider) {
 
 clearBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ action: "clearCounts" }, () => {
-    clearStatus.textContent = "✓ Blocked videos cleared";
+    clearStatus.textContent = "✓ Video counts cleared";
     clearStatus.style.background = "#dcfce7";
     clearStatus.style.color = "#166534";
 
