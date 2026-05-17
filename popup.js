@@ -5,6 +5,10 @@ const thresholdUnit = document.getElementById("thresholdUnit");
 const pauseAllToggle = document.getElementById("pauseAllToggle");
 const viewBlockedBtn = document.getElementById("viewBlockedBtn");
 const viewAllowlistBtn = document.getElementById("viewAllowlistBtn");
+const exportDataBtn = document.getElementById("exportDataBtn");
+const importDataBtn = document.getElementById("importDataBtn");
+const dataImportInput = document.getElementById("dataImportInput");
+const dataStatus = document.getElementById("dataStatus");
 const clearBtn = document.getElementById("clearBtn");
 const clearStatus = document.getElementById("clearStatus");
 
@@ -17,6 +21,87 @@ function setUIEnabled(enabled) {
 function updatePauseUI(states) {
   if (!states) return;
   if (pauseAllToggle) pauseAllToggle.checked = !!states.pauseAll;
+}
+
+function setDataStatus(message, isError = false) {
+  if (!dataStatus) return;
+  dataStatus.textContent = message;
+  dataStatus.style.background = isError ? "#fee2e2" : "#f0fdf4";
+  dataStatus.style.color = isError ? "#991b1b" : "#166534";
+}
+
+function clearDataStatus() {
+  if (!dataStatus) return;
+  dataStatus.textContent = "";
+  dataStatus.style.background = "";
+  dataStatus.style.color = "";
+}
+
+function sendMessagePromise(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+
+      resolve(response);
+    });
+  });
+}
+
+function getLocalStorage(keys) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(keys, (result) => resolve(result || {}));
+  });
+}
+
+function downloadJson(filename, payload) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportData() {
+  const storageResult = await getLocalStorage([
+    "videoCounts",
+    "threshold",
+    "pauseAll",
+    "allowlistedVideos",
+    "allowlistedChannels"
+  ]);
+  const backup = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    data: {
+      videoCounts: storageResult.videoCounts || {},
+      threshold: storageResult.threshold || 5,
+      pauseAll: !!storageResult.pauseAll,
+      allowlistedVideos: storageResult.allowlistedVideos || [],
+      allowlistedChannels: storageResult.allowlistedChannels || []
+    }
+  };
+
+  const filename = `youtube-recommendation-blocker-backup-${new Date().toISOString().replaceAll(":", "-")}.json`;
+  downloadJson(filename, backup);
+  setDataStatus("Backup downloaded.");
+}
+
+async function importDataFromFile(file) {
+  const text = await file.text();
+  const backup = JSON.parse(text);
+  const response = await sendMessagePromise({ action: "importData", backup });
+
+  if (!response?.success) {
+    throw new Error(response?.error || "Import failed.");
+  }
+
+  setDataStatus("Data imported.");
 }
 
 chrome.runtime.sendMessage({ action: "getThreshold" }, (response) => {
@@ -73,12 +158,10 @@ function setPauseStates(states, cb) {
 if (pauseAllToggle) {
   pauseAllToggle.addEventListener("change", (e) => {
     const checked = !!e.target.checked;
-    // if pauseAll is toggled on, set both tracking and blocking to true
     if (checked) {
-      setPauseStates({ pauseAll: true, pauseTracking: true, pauseBlocking: true });
+      setPauseStates({ pauseAll: true });
     } else {
-      // turning off pauseAll clears both
-      setPauseStates({ pauseAll: false, pauseTracking: false, pauseBlocking: false });
+      setPauseStates({ pauseAll: false });
     }
   });
 }
@@ -94,5 +177,37 @@ if (viewAllowlistBtn) {
   viewAllowlistBtn.addEventListener("click", () => {
     const url = chrome.runtime.getURL("allowlist-manager.html");
     chrome.windows.create({ url, width: 700, height: 800, type: "popup" });
+  });
+}
+
+if (exportDataBtn) {
+  exportDataBtn.addEventListener("click", () => {
+    clearDataStatus();
+    exportData().catch((error) => {
+      setDataStatus(error.message || "Export failed.", true);
+    });
+  });
+}
+
+if (importDataBtn && dataImportInput) {
+  importDataBtn.addEventListener("click", () => {
+    clearDataStatus();
+    dataImportInput.click();
+  });
+
+  dataImportInput.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      await importDataFromFile(file);
+    } catch (error) {
+      setDataStatus(error.message || "Import failed.", true);
+    } finally {
+      e.target.value = "";
+    }
   });
 }

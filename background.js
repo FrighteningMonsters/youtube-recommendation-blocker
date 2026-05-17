@@ -1,11 +1,17 @@
 let videoCounts = null;
 let threshold = null;
-let enabled = null;
 let pauseAll = null;
-let pauseTracking = null;
-let pauseBlocking = null;
 let allowlistedVideos = null;
 let allowlistedChannels = null;
+
+const BACKUP_SCHEMA_VERSION = 1;
+const BACKUP_KEYS = [
+  "videoCounts",
+  "threshold",
+  "pauseAll",
+  "allowlistedVideos",
+  "allowlistedChannels"
+];
 
 function normalizeAllowlistEntry(entry, fallbackName) {
   if (typeof entry === "string") {
@@ -47,6 +53,64 @@ function upsertAllowlistEntry(list, entry) {
   }
 }
 
+function normalizeCountsMap(counts) {
+  const normalized = {};
+
+  if (!counts || typeof counts !== "object") {
+    return normalized;
+  }
+
+  for (const [key, value] of Object.entries(counts)) {
+    const count = Number(value);
+
+    if (key && Number.isFinite(count) && count > 0) {
+      normalized[key] = Math.trunc(count);
+    }
+  }
+
+  return normalized;
+}
+
+function normalizeThreshold(value) {
+  const thresholdValue = Number(value);
+
+  if (!Number.isFinite(thresholdValue)) {
+    return 5;
+  }
+
+  return Math.min(20, Math.max(1, Math.trunc(thresholdValue)));
+}
+
+function buildExportPayload(storageResult) {
+  return {
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    exportedAt: new Date().toISOString(),
+    data: {
+      videoCounts: normalizeCountsMap(storageResult.videoCounts),
+      threshold: normalizeThreshold(storageResult.threshold),
+      pauseAll: !!storageResult.pauseAll,
+      allowlistedVideos: normalizeAllowlistList(storageResult.allowlistedVideos, "Video"),
+      allowlistedChannels: normalizeAllowlistList(storageResult.allowlistedChannels, "Channel")
+    }
+  };
+}
+
+function parseImportPayload(payload) {
+  const source = payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
+    ? payload.data
+    : payload;
+
+  const pauseAll = !!source?.pauseAll;
+
+  return {
+    videoCounts: normalizeCountsMap(source?.videoCounts),
+    threshold: normalizeThreshold(source?.threshold),
+    pauseAll,
+    allowlistedVideos: normalizeAllowlistList(source?.allowlistedVideos, "Video"),
+    allowlistedChannels: normalizeAllowlistList(source?.allowlistedChannels, "Channel")
+  };
+}
+
 function sendMessageToTab(tabId, message) {
   try {
     const result = chrome.tabs.sendMessage(tabId, message);
@@ -78,39 +142,18 @@ async function setThreshold(newThreshold) {
   await chrome.storage.local.set({ threshold: newThreshold });
 }
 
-async function getEnabled() {
-  if (enabled === null) {
-    const result = await chrome.storage.local.get(["enabled"]);
-    enabled = result.enabled !== undefined ? result.enabled : true;
-  }
-  return enabled;
-}
-
-async function setEnabled(newEnabled) {
-  enabled = newEnabled;
-  await chrome.storage.local.set({ enabled: newEnabled });
-}
-
 async function getPauseStates() {
-  if (pauseAll === null || pauseTracking === null || pauseBlocking === null) {
-    const result = await chrome.storage.local.get(["pauseAll", "pauseTracking", "pauseBlocking"]);
+  if (pauseAll === null) {
+    const result = await chrome.storage.local.get(["pauseAll"]);
     pauseAll = result.pauseAll || false;
-    pauseTracking = result.pauseTracking || false;
-    pauseBlocking = result.pauseBlocking || false;
   }
-  return { pauseAll, pauseTracking, pauseBlocking };
+  return { pauseAll };
 }
 
 async function setPauseStates(states) {
   if (states.pauseAll !== undefined) pauseAll = states.pauseAll;
-  if (states.pauseTracking !== undefined) pauseTracking = states.pauseTracking;
-  if (states.pauseBlocking !== undefined) pauseBlocking = states.pauseBlocking;
 
-  await chrome.storage.local.set({
-    pauseAll: pauseAll,
-    pauseTracking: pauseTracking,
-    pauseBlocking: pauseBlocking
-  });
+  await chrome.storage.local.set({ pauseAll: pauseAll });
 }
 
 async function getAllowlists() {
@@ -187,7 +230,45 @@ function broadcastAllowlistUpdate() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "getCounts") {
+  if (message.action === "exportData") {
+    chrome.storage.local.get(BACKUP_KEYS, (result) => {
+      sendResponse({ backup: buildExportPayload(result) });
+    });
+    return true;
+  } else if (message.action === "importData") {
+    try {
+      const imported = parseImportPayload(message.backup);
+
+      videoCounts = imported.videoCounts;
+      threshold = imported.threshold;
+      pauseAll = imported.pauseAll;
+      allowlistedVideos = imported.allowlistedVideos;
+      allowlistedChannels = imported.allowlistedChannels;
+
+      chrome.storage.local.set(
+        {
+          videoCounts,
+          threshold,
+          pauseAll,
+          allowlistedVideos,
+          allowlistedChannels
+        },
+        () => {
+          broadcastToYouTubeTabs({ action: "thresholdChanged", threshold });
+          broadcastToYouTubeTabs({
+            action: "pauseStatesChanged",
+            states: { pauseAll }
+          });
+          broadcastToYouTubeTabs({ action: "countsCleared" });
+          broadcastAllowlistUpdate();
+          sendResponse({ success: true });
+        }
+      );
+    } catch (error) {
+      sendResponse({ success: false, error: error?.message || "Import failed" });
+    }
+    return true;
+  } else if (message.action === "getCounts") {
     if (videoCounts === null) {
       chrome.storage.local.get(["videoCounts"], (result) => {
         videoCounts = result.videoCounts || {};
@@ -223,25 +304,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     setPauseStates(message.states).then(() => {
       broadcastToYouTubeTabs({
         action: "pauseStatesChanged",
-        states: {
-          pauseAll: pauseAll,
-          pauseTracking: pauseTracking,
-          pauseBlocking: pauseBlocking
-        }
-      });
-      sendResponse({ success: true });
-    });
-    return true;
-  } else if (message.action === "getEnabled") {
-    getEnabled().then((e) => {
-      sendResponse({ enabled: e });
-    });
-    return true;
-  } else if (message.action === "setEnabled") {
-    setEnabled(message.enabled).then(() => {
-      broadcastToYouTubeTabs({
-        action: "enabledChanged",
-        enabled: message.enabled
+        states: { pauseAll: pauseAll }
       });
       sendResponse({ success: true });
     });

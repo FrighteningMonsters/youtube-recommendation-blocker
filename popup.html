@@ -125,6 +125,24 @@
       border-radius: 4px;
       text-align: center;
     }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    .button-row button {
+      flex: 1;
+    }
+
+    .btn-secondary {
+      background: #4b5563;
+      color: white;
+    }
+
+    .btn-secondary:hover {
+      background: #374151;
+    }
   </style>
 </head>
 <body>
@@ -151,6 +169,15 @@
 
     <div class="setting">
       <button class="btn-clear" id="viewAllowlistBtn" style="background: #10b981;">View allowlist</button>
+    </div>
+
+    <div class="setting">
+      <div class="button-row">
+        <button class="btn-secondary" id="exportDataBtn">Export data</button>
+        <button class="btn-secondary" id="importDataBtn">Import data</button>
+      </div>
+      <input type="file" id="dataImportInput" accept="application/json,.json" style="display:none;" />
+      <div class="status" id="dataStatus"></div>
     </div>
 
     <div class="setting">

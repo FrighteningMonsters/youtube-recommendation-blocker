@@ -3,8 +3,6 @@ console.log("YT EXTENSION LOADED");
 let THRESHOLD = 5;
 const DEBUG = false;
 let PAUSE_ALL = false;
-let PAUSE_TRACKING = false;
-let PAUSE_BLOCKING = false;
 let ALLOWLISTED_VIDEOS = [];
 let ALLOWLISTED_CHANNELS = [];
 
@@ -507,10 +505,8 @@ observer.observe(document.body, {
   subtree: true
 });
 
-chrome.storage.local.get(["pauseAll", "pauseTracking", "pauseBlocking", "allowlistedVideos", "allowlistedChannels"], (res) => {
+chrome.storage.local.get(["pauseAll", "allowlistedVideos", "allowlistedChannels"], (res) => {
   PAUSE_ALL = res.pauseAll !== undefined ? res.pauseAll : false;
-  PAUSE_TRACKING = res.pauseTracking !== undefined ? res.pauseTracking : false;
-  PAUSE_BLOCKING = res.pauseBlocking !== undefined ? res.pauseBlocking : false;
   ALLOWLISTED_VIDEOS = res.allowlistedVideos || [];
   ALLOWLISTED_CHANNELS = res.allowlistedChannels || [];
 
@@ -520,7 +516,7 @@ chrome.storage.local.get(["pauseAll", "pauseTracking", "pauseBlocking", "allowli
       if (PAUSE_ALL) {
         restoreAllCards();
       } else {
-        if (!PAUSE_BLOCKING) fastBlockAlreadyBlocked();
+        fastBlockAlreadyBlocked();
         processVideos();
       }
     });
@@ -534,17 +530,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "pauseStatesChanged") {
     const s = message.states || {};
     PAUSE_ALL = !!s.pauseAll;
-    PAUSE_TRACKING = !!s.pauseTracking;
-    PAUSE_BLOCKING = !!s.pauseBlocking;
     if (PAUSE_ALL) {
       restoreAllCards();
     } else {
-      if (!PAUSE_BLOCKING) {
-        fastBlockAlreadyBlocked();
-        processVideos();
-      } else {
-        restoreAllCards();
-      }
+      fastBlockAlreadyBlocked();
+      processVideos();
     }
   } else if (message.action === "countsCleared") {
     countsCache = null;
