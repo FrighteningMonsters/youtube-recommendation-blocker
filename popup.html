@@ -173,6 +173,15 @@
     </div>
 
     <div class="setting">
+      <label class="label">Decay after</label>
+      <div class="slider-group">
+        <input type="range" id="decayDaysSlider" min="0" max="30" step="1" value="0">
+        <span class="value-display" id="decayDaysValue">0</span>
+      </div>
+      <div class="status">Remove one from a video's view count after <span id="decayDaysDisplay">0</span> days.</div>
+    </div>
+
+    <div class="setting">
       <button class="btn-clear" id="viewBlockedBtn" style="background: #065fd4;">View blocked videos</button>
     </div>
 

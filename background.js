@@ -1,14 +1,16 @@
 let videoCounts = null;
 let threshold = null;
+let decayDays = null;
 let pauseTracking = null;
 let pauseBlocking = null;
 let allowlistedVideos = null;
 let allowlistedChannels = null;
 
-const BACKUP_SCHEMA_VERSION = 1;
+const BACKUP_SCHEMA_VERSION = 2;
 const BACKUP_KEYS = [
   "videoCounts",
   "threshold",
+  "decayDays",
   "pauseTracking",
   "pauseBlocking",
   "allowlistedVideos",
@@ -63,14 +65,38 @@ function normalizeCountsMap(counts) {
   }
 
   for (const [key, value] of Object.entries(counts)) {
-    const count = Number(value);
+    const entry = normalizeCountEntry(value);
 
-    if (key && Number.isFinite(count) && count > 0) {
-      normalized[key] = Math.trunc(count);
+    if (key && entry) {
+      normalized[key] = entry;
     }
   }
 
   return normalized;
+}
+
+function normalizeCountEntry(entry) {
+  if (Number.isFinite(entry)) {
+    const count = Math.trunc(entry);
+
+    return count > 0 ? { count, updatedAt: Date.now() } : null;
+  }
+
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const count = Number(entry.count);
+  const updatedAt = Number(entry.updatedAt);
+
+  if (!Number.isFinite(count) || count <= 0) {
+    return null;
+  }
+
+  return {
+    count: Math.trunc(count),
+    updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? Math.trunc(updatedAt) : Date.now()
+  };
 }
 
 function normalizeThreshold(value) {
@@ -83,6 +109,16 @@ function normalizeThreshold(value) {
   return Math.min(20, Math.max(1, Math.trunc(thresholdValue)));
 }
 
+function normalizeDecayDays(value) {
+  const decayValue = Number(value);
+
+  if (!Number.isFinite(decayValue)) {
+    return 0;
+  }
+
+  return Math.min(30, Math.max(0, Math.trunc(decayValue)));
+}
+
 function buildExportPayload(storageResult) {
   return {
     schemaVersion: BACKUP_SCHEMA_VERSION,
@@ -90,6 +126,7 @@ function buildExportPayload(storageResult) {
     data: {
       videoCounts: normalizeCountsMap(storageResult.videoCounts),
       threshold: normalizeThreshold(storageResult.threshold),
+      decayDays: normalizeDecayDays(storageResult.decayDays),
       pauseTracking: !!storageResult.pauseTracking,
       pauseBlocking: !!storageResult.pauseBlocking,
       allowlistedVideos: normalizeAllowlistList(storageResult.allowlistedVideos, "Video"),
@@ -109,6 +146,7 @@ function parseImportPayload(payload) {
   return {
     videoCounts: normalizeCountsMap(source?.videoCounts),
     threshold: normalizeThreshold(source?.threshold),
+    decayDays: normalizeDecayDays(source?.decayDays),
     pauseTracking,
     pauseBlocking,
     allowlistedVideos: normalizeAllowlistList(source?.allowlistedVideos, "Video"),
@@ -142,9 +180,23 @@ async function getThreshold() {
   return threshold;
 }
 
+async function getDecayDays() {
+  if (decayDays === null) {
+    const result = await chrome.storage.local.get(["decayDays"]);
+    decayDays = normalizeDecayDays(result.decayDays);
+  }
+
+  return decayDays;
+}
+
 async function setThreshold(newThreshold) {
   threshold = newThreshold;
   await chrome.storage.local.set({ threshold: newThreshold });
+}
+
+async function setDecayDays(newDecayDays) {
+  decayDays = normalizeDecayDays(newDecayDays);
+  await chrome.storage.local.set({ decayDays });
 }
 
 async function getPauseStates() {
@@ -261,6 +313,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       videoCounts = imported.videoCounts;
       threshold = imported.threshold;
+      decayDays = imported.decayDays;
       pauseTracking = imported.pauseTracking;
       pauseBlocking = imported.pauseBlocking;
       allowlistedVideos = imported.allowlistedVideos;
@@ -270,6 +323,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         {
           videoCounts,
           threshold,
+          decayDays,
           pauseTracking,
           pauseBlocking,
           allowlistedVideos,
@@ -278,11 +332,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         () => {
           chrome.storage.local.remove("pauseAll");
           broadcastToYouTubeTabs({ action: "thresholdChanged", threshold });
+          broadcastToYouTubeTabs({ action: "decayDaysChanged", decayDays });
           broadcastToYouTubeTabs({
             action: "pauseStatesChanged",
             states: { pauseTracking, pauseBlocking }
           });
-          broadcastToYouTubeTabs({ action: "countsCleared" });
+          broadcastToYouTubeTabs({ action: "countsUpdated" });
           broadcastAllowlistUpdate();
           sendResponse({ success: true });
         }
@@ -309,11 +364,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ threshold: t });
     });
     return true;
+  } else if (message.action === "getDecayDays") {
+    getDecayDays().then((value) => {
+      sendResponse({ decayDays: value });
+    });
+    return true;
   } else if (message.action === "setThreshold") {
     setThreshold(message.threshold).then(() => {
       broadcastToYouTubeTabs({
         action: "thresholdChanged",
         threshold: message.threshold
+      });
+      sendResponse({ success: true });
+    });
+    return true;
+  } else if (message.action === "setDecayDays") {
+    setDecayDays(message.decayDays).then(() => {
+      broadcastToYouTubeTabs({
+        action: "decayDaysChanged",
+        decayDays
       });
       sendResponse({ success: true });
     });
@@ -338,14 +407,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "clearCounts") {
     videoCounts = {};
     chrome.storage.local.set({ videoCounts: {} });
-    broadcastToYouTubeTabs({ action: "countsCleared" });
+        videoCounts = normalizeCountsMap(result.videoCounts);
+        chrome.storage.local.set({ videoCounts });
     sendResponse({ success: true });
   } else if (message.action === "getAllowlists") {
     getAllowlists().then((lists) => {
       sendResponse(lists);
     });
     return true;
-  } else if (message.action === "addAllowlistVideo") {
+    videoCounts = normalizeCountsMap(message.counts);
     addAllowlistVideo(message.videoId).then(() => {
       sendResponse({ success: true });
     });

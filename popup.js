@@ -2,6 +2,9 @@ const thresholdSlider = document.getElementById("thresholdSlider");
 const thresholdValue = document.getElementById("thresholdValue");
 const thresholdDisplay = document.getElementById("thresholdDisplay");
 const thresholdUnit = document.getElementById("thresholdUnit");
+const decayDaysSlider = document.getElementById("decayDaysSlider");
+const decayDaysValue = document.getElementById("decayDaysValue");
+const decayDaysDisplay = document.getElementById("decayDaysDisplay");
 const pauseTrackingToggle = document.getElementById("pauseTrackingToggle");
 const pauseBlockingToggle = document.getElementById("pauseBlockingToggle");
 const viewBlockedBtn = document.getElementById("viewBlockedBtn");
@@ -17,6 +20,14 @@ function updatePauseUI(states) {
   if (!states) return;
   if (pauseTrackingToggle) pauseTrackingToggle.checked = !!states.pauseTracking;
   if (pauseBlockingToggle) pauseBlockingToggle.checked = !!states.pauseBlocking;
+}
+
+function updateDecayUI(value) {
+  const days = Number.isFinite(value) ? value : 0;
+
+  if (decayDaysSlider) decayDaysSlider.value = String(days);
+  if (decayDaysValue) decayDaysValue.textContent = String(days);
+  if (decayDaysDisplay) decayDaysDisplay.textContent = String(days);
 }
 
 function setDataStatus(message, isError = false) {
@@ -67,17 +78,19 @@ async function exportData() {
   const storageResult = await getLocalStorage([
     "videoCounts",
     "threshold",
+    "decayDays",
     "pauseTracking",
     "pauseBlocking",
     "allowlistedVideos",
     "allowlistedChannels"
   ]);
   const backup = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
     data: {
       videoCounts: storageResult.videoCounts || {},
       threshold: storageResult.threshold || 5,
+      decayDays: storageResult.decayDays ?? 0,
       pauseTracking: !!storageResult.pauseTracking,
       pauseBlocking: !!storageResult.pauseBlocking,
       allowlistedVideos: storageResult.allowlistedVideos || [],
@@ -110,6 +123,10 @@ chrome.runtime.sendMessage({ action: "getThreshold" }, (response) => {
   if (thresholdUnit) thresholdUnit.textContent = threshold === 1 ? "time" : "times";
 });
 
+chrome.runtime.sendMessage({ action: "getDecayDays" }, (response) => {
+  updateDecayUI(Number.isFinite(response?.decayDays) ? response.decayDays : 0);
+});
+
 chrome.runtime.sendMessage({ action: "getPauseStates" }, (states) => {
   updatePauseUI(states);
 });
@@ -127,6 +144,20 @@ thresholdSlider.addEventListener("input", (e) => {
     }
   );
 });
+
+if (decayDaysSlider) {
+  decayDaysSlider.addEventListener("input", (e) => {
+    const value = parseInt(e.target.value, 10);
+    updateDecayUI(value);
+
+    chrome.runtime.sendMessage(
+      { action: "setDecayDays", decayDays: value },
+      () => {
+        console.log("Decay days updated to", value);
+      }
+    );
+  });
+}
 
 clearBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ action: "clearCounts" }, () => {

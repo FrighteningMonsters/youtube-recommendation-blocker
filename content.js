@@ -1,6 +1,7 @@
 console.log("YT EXTENSION LOADED");
 
 let THRESHOLD = 5;
+let DECAY_DAYS = 0;
 const DEBUG = false;
 let PAUSE_ALL = false;
 let PAUSE_TRACKING = false;
@@ -8,6 +9,7 @@ let PAUSE_BLOCKING = false;
 let ALLOWLISTED_VIDEOS = [];
 let ALLOWLISTED_CHANNELS = [];
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const cardVideoIds = new WeakMap();
 
 let countsCache = null;
@@ -64,6 +66,50 @@ function isAllowlistedVideo(videoId) {
 
 function isAllowlistedChannel(channelId) {
   return ALLOWLISTED_CHANNELS.some((item) => item && item.id === channelId);
+}
+
+function getCardContainer(card) {
+  return card.closest(
+    "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
+  ) || card;
+}
+
+function normalizeCountEntry(entry) {
+  if (Number.isFinite(entry)) {
+    const count = Math.trunc(entry);
+
+    return count > 0 ? { count, updatedAt: Date.now() } : null;
+  }
+
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const count = Number(entry.count);
+  const updatedAt = Number(entry.updatedAt);
+
+  if (!Number.isFinite(count) || count <= 0) {
+    return null;
+  }
+
+  return {
+    count: Math.trunc(count),
+    updatedAt: Number.isFinite(updatedAt) && updatedAt > 0 ? Math.trunc(updatedAt) : Date.now()
+  };
+}
+
+function normalizeCountsCache(counts) {
+  const normalized = {};
+
+  for (const [videoId, entry] of Object.entries(counts || {})) {
+    const normalizedEntry = normalizeCountEntry(entry);
+
+    if (videoId && normalizedEntry) {
+      normalized[videoId] = normalizedEntry;
+    }
+  }
+
+  return normalized;
 }
 
 function extractVideoTitle(card) {
@@ -249,9 +295,17 @@ async function getThreshold() {
   });
 }
 
+async function getDecayDays() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "getDecayDays" }, (response) => {
+      resolve(Number.isFinite(response.decayDays) ? response.decayDays : 0);
+    });
+  });
+}
+
 async function getCountsCache() {
   if (!countsCache) {
-    countsCache = await getCounts();
+    countsCache = normalizeCountsCache(await getCounts());
   }
 
   return countsCache;
@@ -260,7 +314,86 @@ async function getCountsCache() {
 function getValidCount(counts, videoId) {
   const value = counts[videoId];
 
-  return Number.isFinite(value) && value > 0 ? value : 0;
+  if (Number.isFinite(value)) {
+    return value > 0 ? Math.trunc(value) : 0;
+  }
+
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+
+  const count = Number(value.count);
+
+  return Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+}
+
+function getDecayedCount(entry, now = Date.now()) {
+  const normalized = normalizeCountEntry(entry);
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (DECAY_DAYS <= 0) {
+    if (normalized.updatedAt < now) {
+      const nextCount = normalized.count - 1;
+
+      return nextCount > 0
+        ? { count: nextCount, updatedAt: now }
+        : null;
+    }
+
+    return normalized;
+  }
+
+  const intervalMs = DECAY_DAYS * DAY_MS;
+  const elapsed = now - normalized.updatedAt;
+
+  if (!Number.isFinite(elapsed) || elapsed < intervalMs) {
+    return normalized;
+  }
+
+  const steps = Math.floor(elapsed / intervalMs);
+  const nextCount = normalized.count - steps;
+
+  if (nextCount <= 0) {
+    return null;
+  }
+
+  return {
+    count: nextCount,
+    updatedAt: normalized.updatedAt + steps * intervalMs
+  };
+}
+
+function decayCountsCache(now = Date.now()) {
+  if (!countsCache) {
+    return false;
+  }
+
+  let changed = false;
+
+  for (const [videoId, entry] of Object.entries(countsCache)) {
+    const decayed = getDecayedCount(entry, now);
+
+    if (!decayed) {
+      delete countsCache[videoId];
+      changed = true;
+      continue;
+    }
+
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      entry.count !== decayed.count ||
+      entry.updatedAt !== decayed.updatedAt
+    ) {
+      countsCache[videoId] = decayed;
+      changed = true;
+    }
+  }
+
+  return changed;
 }
 
 function scheduleCountsSave() {
@@ -307,11 +440,19 @@ function findVideoLink(card) {
 }
 
 function removeCardFromLayout(card) {
-  const container = card.closest(
-    "ytd-rich-item-renderer, ytd-compact-video-renderer, ytd-video-renderer, ytd-grid-video-renderer"
-  ) || card;
+  const container = getCardContainer(card);
 
   container.style.display = "none";
+  container.dataset.ytExtHidden = "true";
+}
+
+function restoreCardVisibility(card) {
+  const container = getCardContainer(card);
+
+  if (container.dataset.ytExtHidden === "true") {
+    container.style.display = "";
+    delete container.dataset.ytExtHidden;
+  }
 }
 
 function compactHomeGrid() {
@@ -334,6 +475,10 @@ function compactHomeGrid() {
 async function fastBlockAlreadyBlocked() {
   if (!countsCache) {
     return;
+  }
+
+  if (decayCountsCache()) {
+    scheduleCountsSave();
   }
 
   const cards = findCards();
@@ -407,69 +552,81 @@ async function processVideos() {
   isProcessing = true;
 
   try {
-  const counts = await getCountsCache();
+    const counts = await getCountsCache();
 
-  const cards = findCards();
-  let removedAnyCard = false;
-
-  log("PROCESSING CARDS:", cards.length);
-
-  for (const card of cards) {
-    const link = findVideoLink(card);
-
-    if (!link || !link.href) {
-      continue;
+    if (decayCountsCache()) {
+      scheduleCountsSave();
     }
 
-    const videoId = extractVideoId(link.href);
+    const cards = findCards();
+    let removedAnyCard = false;
 
-    if (!videoId) {
-      continue;
-    }
+    log("PROCESSING CARDS:", cards.length);
 
-    if (card.dataset.ytExtRenderedVideoId === videoId) {
-      continue;
-    }
+    for (const card of cards) {
+      const link = findVideoLink(card);
 
-    const previousVideoId = cardVideoIds.get(card);
-
-    if (previousVideoId !== videoId) {
-      if (!PAUSE_TRACKING) {
-        counts[videoId] = getValidCount(counts, videoId) + 1;
+      if (!link || !link.href) {
+        continue;
       }
-      cardVideoIds.set(card, videoId);
+
+      const videoId = extractVideoId(link.href);
+
+      if (!videoId) {
+        continue;
+      }
+
+      if (card.dataset.ytExtRenderedVideoId === videoId) {
+        continue;
+      }
+
+      const previousVideoId = cardVideoIds.get(card);
+
+      if (previousVideoId !== videoId) {
+        if (!PAUSE_TRACKING) {
+          const currentEntry = counts[videoId];
+          const decayedEntry = getDecayedCount(currentEntry) || { count: 0, updatedAt: Date.now() };
+
+          counts[videoId] = {
+            count: decayedEntry.count + 1,
+            updatedAt: Date.now()
+          };
+        }
+        cardVideoIds.set(card, videoId);
+      }
+
+      const currentCount = getValidCount(counts, videoId);
+
+      log(`VIDEO ${videoId} COUNT ${currentCount}`);
+
+      card.dataset.videoId = videoId;
+      card.dataset.ytExtRenderedVideoId = videoId;
+      updateCountBadge(card, currentCount);
+
+      const videoName = extractVideoTitle(card);
+      const channelInfo = extractChannelInfo(card);
+      ensureAllowButtons(card, videoId, videoName, channelInfo);
+
+      if (
+        currentCount > THRESHOLD &&
+        !PAUSE_BLOCKING &&
+        !isAllowlistedVideo(videoId) &&
+        !(channelInfo?.channelId && isAllowlistedChannel(channelInfo.channelId))
+      ) {
+        removeCardFromLayout(card);
+        removedAnyCard = true;
+
+        log(`HIDING ${videoId}`);
+      } else {
+        restoreCardVisibility(card);
+      }
     }
 
-    const currentCount = getValidCount(counts, videoId);
-
-    log(`VIDEO ${videoId} COUNT ${currentCount}`);
-
-    card.dataset.videoId = videoId;
-    card.dataset.ytExtRenderedVideoId = videoId;
-    updateCountBadge(card, currentCount);
-
-    const videoName = extractVideoTitle(card);
-    const channelInfo = extractChannelInfo(card);
-    ensureAllowButtons(card, videoId, videoName, channelInfo);
-
-    if (
-      currentCount > THRESHOLD &&
-      !PAUSE_BLOCKING &&
-      !isAllowlistedVideo(videoId) &&
-      !(channelInfo?.channelId && isAllowlistedChannel(channelInfo.channelId))
-    ) {
-      removeCardFromLayout(card);
-      removedAnyCard = true;
-
-      log(`HIDING ${videoId}`);
+    if (removedAnyCard) {
+      refreshHomeGridLayout();
     }
-  }
 
-  if (removedAnyCard) {
-    refreshHomeGridLayout();
-  }
-
-  scheduleCountsSave();
+    scheduleCountsSave();
   } finally {
     isProcessing = false;
 
@@ -513,22 +670,32 @@ chrome.storage.local.get(["pauseTracking", "pauseBlocking", "pauseAll", "allowli
   ALLOWLISTED_VIDEOS = res.allowlistedVideos || [];
   ALLOWLISTED_CHANNELS = res.allowlistedChannels || [];
 
-  getCountsCache().then(() => {
-    getThreshold().then((t) => {
-      THRESHOLD = t;
-      if (PAUSE_TRACKING && PAUSE_BLOCKING) {
-        restoreAllCards();
-      } else {
-        fastBlockAlreadyBlocked();
-        processVideos();
-      }
-    });
+  Promise.all([getCountsCache(), getThreshold(), getDecayDays()]).then(([, t, decay]) => {
+    THRESHOLD = t;
+    DECAY_DAYS = decay;
+
+    if (decayCountsCache()) {
+      scheduleCountsSave();
+    }
+
+    if (PAUSE_TRACKING && PAUSE_BLOCKING) {
+      restoreAllCards();
+    } else {
+      fastBlockAlreadyBlocked();
+      processVideos();
+    }
   });
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "thresholdChanged") {
     THRESHOLD = message.threshold;
+    processVideos();
+  } else if (message.action === "decayDaysChanged") {
+    DECAY_DAYS = Number.isFinite(message.decayDays) ? message.decayDays : 0;
+    if (decayCountsCache()) {
+      scheduleCountsSave();
+    }
     processVideos();
   } else if (message.action === "pauseStatesChanged") {
     const s = message.states || {};
@@ -543,6 +710,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === "countsCleared") {
     countsCache = null;
     getCountsCache().then(() => {
+      processVideos();
+    });
+  } else if (message.action === "countsUpdated") {
+    countsCache = null;
+    getCountsCache().then(() => {
+      if (decayCountsCache()) {
+        scheduleCountsSave();
+      }
       processVideos();
     });
   } else if (message.action === "allowlistUpdated") {

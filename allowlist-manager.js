@@ -91,6 +91,7 @@ async function exportData() {
   const storageResult = await getLocalStorage([
     "videoCounts",
     "threshold",
+    "decayDays",
     "pauseTracking",
     "pauseBlocking",
     "allowlistedVideos",
@@ -98,11 +99,12 @@ async function exportData() {
   ]);
 
   const backup = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
     data: {
       videoCounts: storageResult.videoCounts || {},
       threshold: storageResult.threshold || 5,
+      decayDays: storageResult.decayDays ?? 0,
       pauseTracking: !!storageResult.pauseTracking,
       pauseBlocking: !!storageResult.pauseBlocking,
       allowlistedVideos: storageResult.allowlistedVideos || [],
