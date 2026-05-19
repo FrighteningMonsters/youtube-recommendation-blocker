@@ -335,14 +335,6 @@ function getDecayedCount(entry, now = Date.now()) {
   }
 
   if (DECAY_DAYS <= 0) {
-    if (normalized.updatedAt < now) {
-      const nextCount = normalized.count - 1;
-
-      return nextCount > 0
-        ? { count: nextCount, updatedAt: now }
-        : null;
-    }
-
     return normalized;
   }
 

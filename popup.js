@@ -24,10 +24,14 @@ function updatePauseUI(states) {
 
 function updateDecayUI(value) {
   const days = Number.isFinite(value) ? value : 0;
+  const label = days === 0 ? "Disabled" : String(days);
+  const status = days === 0
+    ? "View counts never decay."
+    : `Remove one from a video's view count after ${days} ${days === 1 ? "day" : "days"}.`;
 
   if (decayDaysSlider) decayDaysSlider.value = String(days);
-  if (decayDaysValue) decayDaysValue.textContent = String(days);
-  if (decayDaysDisplay) decayDaysDisplay.textContent = String(days);
+  if (decayDaysValue) decayDaysValue.textContent = label;
+  if (decayDaysDisplay) decayDaysDisplay.textContent = status;
 }
 
 function setDataStatus(message, isError = false) {
