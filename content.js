@@ -273,6 +273,11 @@ function updateCountBadge(card, count) {
 async function getCounts() {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ action: "getCounts" }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        resolve({});
+        return;
+      }
+
       resolve(response.counts || {});
     });
   });
@@ -290,6 +295,11 @@ async function saveCounts(counts) {
 async function getThreshold() {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ action: "getThreshold" }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        resolve(5);
+        return;
+      }
+
       resolve(response.threshold || 5);
     });
   });
@@ -298,6 +308,11 @@ async function getThreshold() {
 async function getDecayDays() {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ action: "getDecayDays" }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        resolve(0);
+        return;
+      }
+
       resolve(Number.isFinite(response.decayDays) ? response.decayDays : 0);
     });
   });

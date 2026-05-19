@@ -165,7 +165,7 @@ function sendMessageToTab(tabId, message) {
 }
 
 function broadcastToYouTubeTabs(message) {
-  chrome.tabs.query({ url: "https://www.youtube.com/*" }, (tabs) => {
+  chrome.tabs.query({ url: "https://*.youtube.com/*" }, (tabs) => {
     for (const tab of tabs) {
       sendMessageToTab(tab.id, message);
     }
@@ -406,22 +406,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   } else if (message.action === "clearCounts") {
     videoCounts = {};
-    chrome.storage.local.set({ videoCounts: {} });
-        videoCounts = normalizeCountsMap(result.videoCounts);
-        chrome.storage.local.set({ videoCounts });
-    sendResponse({ success: true });
+    chrome.storage.local.set({ videoCounts: {} }, () => {
+      broadcastToYouTubeTabs({ action: "countsCleared" });
+      sendResponse({ success: true });
+    });
+    return true;
   } else if (message.action === "getAllowlists") {
     getAllowlists().then((lists) => {
       sendResponse(lists);
     });
     return true;
-    videoCounts = normalizeCountsMap(message.counts);
-    addAllowlistVideo(message.videoId).then(() => {
+  } else if (message.action === "addAllowlistVideo") {
+    addAllowlistVideo(message.videoId, message.videoName).then(() => {
       sendResponse({ success: true });
     });
     return true;
   } else if (message.action === "addAllowlistChannel") {
-    addAllowlistChannel(message.channelId).then(() => {
+    addAllowlistChannel(message.channelId, message.channelName).then(() => {
       sendResponse({ success: true });
     });
     return true;
