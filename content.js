@@ -60,6 +60,14 @@ function ensureCountBadge(card) {
   return badge;
 }
 
+function removeCountBadge(card) {
+  const badge = card.querySelector(".yt-extension-count-badge");
+
+  if (badge) {
+    badge.remove();
+  }
+}
+
 function isAllowlistedVideo(videoId) {
   return ALLOWLISTED_VIDEOS.some((item) => item && item.id === videoId);
 }
@@ -262,6 +270,7 @@ function ensureAllowButtons(card, videoId, videoName, channelInfo) {
 
 function updateCountBadge(card, count) {
   if (!Number.isFinite(count) || count < 2) {
+    removeCountBadge(card);
     return;
   }
 
@@ -540,6 +549,18 @@ async function fastBlockAlreadyBlocked() {
     }
   }
 
+function resetProcessedCards() {
+  const cards = findCards();
+
+  for (const card of cards) {
+    try {
+      delete card.dataset.ytExtRenderedVideoId;
+      delete card.dataset.videoId;
+      delete card.dataset.ytExtFastChecked;
+    } catch (e) {}
+  }
+}
+
 function refreshHomeGridLayout() {
   compactHomeGrid();
   window.dispatchEvent(new Event("resize"));
@@ -716,11 +737,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   } else if (message.action === "countsCleared") {
     countsCache = null;
+    resetProcessedCards();
     getCountsCache().then(() => {
       processVideos();
     });
   } else if (message.action === "countsUpdated") {
     countsCache = null;
+    resetProcessedCards();
     getCountsCache().then(() => {
       if (decayCountsCache()) {
         scheduleCountsSave();
